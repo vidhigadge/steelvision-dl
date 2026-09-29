@@ -1,0 +1,31 @@
+# Virtual environment
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# macOS
+.DS_Store
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code
+.vscode/
+
+# Raw and processed datasets
+data/raw/
+data/processed/
+
+# Trained model weights
+*.pth
+*.pt
+*.onnx
+
+# Logs
+*.log
+
+# Environment files
+.env
