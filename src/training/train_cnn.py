@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT))
 
 from src.data.loaders import create_dataloaders
-from models.cnn import SimpleCNN
+from src.models.cnn import SimpleCNN
 
 
 def get_device():
