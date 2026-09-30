@@ -58,3 +58,8 @@ print(
         target_names=test_loader.dataset.classes,
     )
 )
+
+from sklearn.metrics import accuracy_score, classification_report
+accuracy = accuracy_score(all_labels, all_predictions)
+
+print(f"Test Accuracy: {accuracy:.4f}")
