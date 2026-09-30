@@ -7,12 +7,23 @@ from torchvision import datasets, transforms
 def create_dataloaders(
     data_dir="data/splits",
     batch_size=32,
+    normalize=False,
 ):
-    transform = transforms.Compose([
+    transform_list = [
         transforms.Grayscale(num_output_channels=3),
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
-    ])
+    ]
+
+    if normalize:
+        transform_list.append(
+            transforms.Normalize(
+                mean=[0.485, 0.456, 0.406],
+                std=[0.229, 0.224, 0.225],
+            )
+        )
+
+    transform = transforms.Compose(transform_list)
 
     data_dir = Path(data_dir)
 
