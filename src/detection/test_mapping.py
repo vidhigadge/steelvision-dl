@@ -8,7 +8,7 @@ from src.detection.coordinate_mapping import map_box_to_original
 
 MODEL_PATH = "runs/detect/steel_defect_yolo/weights/best.pt"
 IMAGE_DIR = Path("data/raw/NEU-CLS-YOLO/valid/images")
-PROCESSED_PATH = Path("data/processed_mapping_test.jpg")
+PROCESSED_PATH = Path("data/processed/mapping_test.jpg")
 
 
 def main():
@@ -20,6 +20,12 @@ def main():
         original_size = image.size
 
         processed = image.resize((800, 800))
+
+        PROCESSED_PATH.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
         processed.save(PROCESSED_PATH)
 
     results = model.predict(
@@ -42,6 +48,7 @@ def main():
 
     for box in result.boxes:
         xyxy = box.xyxy[0].cpu().tolist()
+
         class_id = int(box.cls[0])
         confidence = float(box.conf[0])
 
@@ -54,10 +61,15 @@ def main():
         print()
         print("Class:", model.names[class_id])
         print(f"Confidence: {confidence:.3f}")
-        print("Processed box:", tuple(round(v, 2) for v in xyxy))
+
+        print(
+            "Processed box:",
+            tuple(round(value, 2) for value in xyxy),
+        )
+
         print(
             "Mapped box:",
-            tuple(round(v, 2) for v in mapped_box),
+            tuple(round(value, 2) for value in mapped_box),
         )
 
 
