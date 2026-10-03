@@ -29,3 +29,16 @@ data/processed/
 
 # Environment files
 .env
+
+# Generated super-resolution data
+data/sr/
+
+# External SR tools
+tools/Real-ESRGAN/
+tools/realesrgan-ncnn/
+
+# Downloaded archives
+realesrgan-ncnn-macos.zip
+
+# SR virtual environment
+.venv-sr/
