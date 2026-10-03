@@ -108,6 +108,7 @@ def main():
             all_predictions,
             target_names=dataset.classes,
             digits=4,
+            zero_division=0,
         )
     )
 
