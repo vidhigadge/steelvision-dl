@@ -42,3 +42,6 @@ realesrgan-ncnn-macos.zip
 
 # SR virtual environment
 .venv-sr/
+
+# YOLO training outputs
+runs/
