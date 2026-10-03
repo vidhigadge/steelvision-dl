@@ -45,3 +45,6 @@ realesrgan-ncnn-macos.zip
 
 # YOLO training outputs
 runs/
+
+# Generated explainability outputs
+outputs/
