@@ -4,6 +4,8 @@ import base64
 
 import numpy as np
 import onnxruntime as ort
+import torch
+import torch.nn as nn
 from fastapi import (
     FastAPI,
     File,
@@ -14,7 +16,7 @@ from fastapi import (
 from fastapi.responses import Response
 from PIL import Image
 from pydantic import BaseModel
-from torchvision import transforms
+from torchvision import models, transforms
 
 from src.detection.localization_service import (
     localize_defects,
@@ -24,13 +26,19 @@ from src.explainability.gradcam_service import (
 )
 
 
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Configuration
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
-MODEL_PATH = Path(
+CLASSIFIER_MODEL_PATH = Path(
     "models/resnet50_finetune.onnx"
 )
+
+DOMAIN_MODEL_PATH = Path(
+    "models/domain_validator_mobilenet_v3_small.pth"
+)
+
+DOMAIN_THRESHOLD = 0.90
 
 CLASS_NAMES = [
     "crazing",
@@ -42,9 +50,9 @@ CLASS_NAMES = [
 ]
 
 
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Response models
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 class TopPrediction(BaseModel):
     class_name: str
@@ -57,6 +65,14 @@ class PredictionResponse(BaseModel):
     confidence: float
     entropy: float
     top_3: list[TopPrediction]
+
+
+class DomainValidationResponse(BaseModel):
+    filename: str
+    supported: bool
+    supported_probability: float
+    unsupported_probability: float
+    threshold: float
 
 
 class LocalizationDetection(BaseModel):
@@ -79,64 +95,205 @@ class LocalizationResponse(BaseModel):
     mapped_image: str
 
 
-# ----------------------------------------------------------------------------
-# Classification preprocessing
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Shared preprocessing
+# -----------------------------------------------------------------------------
 
-TRANSFORM = transforms.Compose([
-    transforms.Grayscale(
-        num_output_channels=3
-    ),
-    transforms.Resize(
-        (224, 224)
-    ),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[
-            0.485,
-            0.456,
-            0.406,
-        ],
-        std=[
-            0.229,
-            0.224,
-            0.225,
-        ],
-    ),
-])
-
-
-# ----------------------------------------------------------------------------
-# FastAPI application
-# ----------------------------------------------------------------------------
-
-app = FastAPI(
-    title="SteelVision API",
-    version="1.0.0",
+CLASSIFICATION_TRANSFORM = transforms.Compose(
+    [
+        transforms.Grayscale(
+            num_output_channels=3
+        ),
+        transforms.Resize(
+            (
+                224,
+                224,
+            )
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[
+                0.485,
+                0.456,
+                0.406,
+            ],
+            std=[
+                0.229,
+                0.224,
+                0.225,
+            ],
+        ),
+    ]
 )
 
 
-# ----------------------------------------------------------------------------
-# ONNX classification model
-# ----------------------------------------------------------------------------
+DOMAIN_TRANSFORM = transforms.Compose(
+    [
+        transforms.Grayscale(
+            num_output_channels=3
+        ),
+        transforms.Resize(
+            (
+                224,
+                224,
+            )
+        ),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[
+                0.485,
+                0.456,
+                0.406,
+            ],
+            std=[
+                0.229,
+                0.224,
+                0.225,
+            ],
+        ),
+    ]
+)
 
-session = ort.InferenceSession(
-    str(MODEL_PATH),
+
+# -----------------------------------------------------------------------------
+# FastAPI application
+# -----------------------------------------------------------------------------
+
+app = FastAPI(
+    title="SteelVision API",
+    version="1.1.0",
+)
+
+
+# -----------------------------------------------------------------------------
+# ResNet-50 ONNX classifier
+# -----------------------------------------------------------------------------
+
+classification_session = ort.InferenceSession(
+    str(
+        CLASSIFIER_MODEL_PATH
+    ),
     providers=[
         "CPUExecutionProvider"
     ],
 )
 
 
-# ----------------------------------------------------------------------------
-# Helpers
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# MobileNetV3-Small domain validator
+# -----------------------------------------------------------------------------
 
-def softmax(values):
-    values = values - np.max(
-        values,
-        axis=1,
-        keepdims=True,
+if torch.backends.mps.is_available():
+    DOMAIN_DEVICE = torch.device(
+        "mps"
+    )
+
+elif torch.cuda.is_available():
+    DOMAIN_DEVICE = torch.device(
+        "cuda"
+    )
+
+else:
+    DOMAIN_DEVICE = torch.device(
+        "cpu"
+    )
+
+
+def load_domain_model():
+    if not DOMAIN_MODEL_PATH.exists():
+        raise RuntimeError(
+            "Domain validator checkpoint was not found at "
+            f"{DOMAIN_MODEL_PATH}"
+        )
+
+    checkpoint = torch.load(
+        DOMAIN_MODEL_PATH,
+        map_location=DOMAIN_DEVICE,
+    )
+
+    model = models.mobilenet_v3_small(
+        weights=None
+    )
+
+    in_features = (
+        model.classifier[
+            3
+        ].in_features
+    )
+
+    model.classifier[
+        3
+    ] = nn.Linear(
+        in_features,
+        2,
+    )
+
+    model.load_state_dict(
+        checkpoint[
+            "model_state_dict"
+        ]
+    )
+
+    model = model.to(
+        DOMAIN_DEVICE
+    )
+
+    model.eval()
+
+    class_to_idx = checkpoint[
+        "class_to_idx"
+    ]
+
+    if (
+        "supported"
+        not in class_to_idx
+        or "unsupported"
+        not in class_to_idx
+    ):
+        raise RuntimeError(
+            "Domain validator checkpoint does not contain "
+            "the expected supported/unsupported classes."
+        )
+
+    return (
+        model,
+        class_to_idx,
+    )
+
+
+(
+    domain_model,
+    domain_class_to_idx,
+) = load_domain_model()
+
+
+DOMAIN_SUPPORTED_INDEX = (
+    domain_class_to_idx[
+        "supported"
+    ]
+)
+
+DOMAIN_UNSUPPORTED_INDEX = (
+    domain_class_to_idx[
+        "unsupported"
+    ]
+)
+
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+
+def softmax(
+    values,
+):
+    values = (
+        values
+        - np.max(
+            values,
+            axis=1,
+            keepdims=True,
+        )
     )
 
     exp_values = np.exp(
@@ -153,10 +310,17 @@ def softmax(values):
     )
 
 
-def preprocess_image(image):
-    tensor = TRANSFORM(
-        image
-    ).unsqueeze(0)
+def preprocess_classification_image(
+    image,
+):
+    tensor = (
+        CLASSIFICATION_TRANSFORM(
+            image
+        )
+        .unsqueeze(
+            0
+        )
+    )
 
     return np.ascontiguousarray(
         tensor.numpy(),
@@ -164,7 +328,27 @@ def preprocess_image(image):
     )
 
 
-def image_to_base64(image):
+def preprocess_domain_image(
+    image,
+):
+    tensor = (
+        DOMAIN_TRANSFORM(
+            image
+        )
+        .unsqueeze(
+            0
+        )
+        .to(
+            DOMAIN_DEVICE
+        )
+    )
+
+    return tensor
+
+
+def image_to_base64(
+    image,
+):
     buffer = BytesIO()
 
     image.save(
@@ -180,7 +364,9 @@ def image_to_base64(image):
     )
 
 
-def validate_file_type(file):
+def validate_file_type(
+    file,
+):
     if file.content_type not in {
         "image/jpeg",
         "image/png",
@@ -188,13 +374,14 @@ def validate_file_type(file):
         raise HTTPException(
             status_code=400,
             detail=(
-                "Only JPEG and PNG "
-                "images are supported"
+                "Only JPEG and PNG images are supported."
             ),
         )
 
 
-async def read_image(file):
+async def read_image(
+    file,
+):
     try:
         contents = await file.read()
 
@@ -202,40 +389,205 @@ async def read_image(file):
             BytesIO(
                 contents
             )
-        ).convert(
+        )
+
+        image.load()
+
+        return image.convert(
             "RGB"
         )
 
-        return image
-
-    except Exception:
+    except Exception as error:
         raise HTTPException(
             status_code=400,
-            detail="Invalid image file",
+            detail="Invalid image file.",
+        ) from error
+
+
+def evaluate_domain(
+    image,
+):
+    input_tensor = (
+        preprocess_domain_image(
+            image
+        )
+    )
+
+    with torch.no_grad():
+        logits = domain_model(
+            input_tensor
         )
 
+        probabilities = torch.softmax(
+            logits,
+            dim=1,
+        )[0]
 
-# ----------------------------------------------------------------------------
+    supported_probability = float(
+        probabilities[
+            DOMAIN_SUPPORTED_INDEX
+        ]
+        .detach()
+        .cpu()
+        .item()
+    )
+
+    unsupported_probability = float(
+        probabilities[
+            DOMAIN_UNSUPPORTED_INDEX
+        ]
+        .detach()
+        .cpu()
+        .item()
+    )
+
+    supported = (
+        supported_probability
+        >= DOMAIN_THRESHOLD
+    )
+
+    return {
+        "supported":
+            supported,
+
+        "supported_probability":
+            supported_probability,
+
+        "unsupported_probability":
+            unsupported_probability,
+
+        "threshold":
+            DOMAIN_THRESHOLD,
+    }
+
+
+def ensure_supported_domain(
+    image,
+):
+    result = evaluate_domain(
+        image
+    )
+
+    if not result[
+        "supported"
+    ]:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error":
+                    "unsupported_input",
+
+                "message":
+                    (
+                        "The uploaded image does not appear "
+                        "to belong to SteelVision's supported "
+                        "steel-defect domain."
+                    ),
+
+                "supported_probability":
+                    round(
+                        result[
+                            "supported_probability"
+                        ],
+                        6,
+                    ),
+
+                "threshold":
+                    DOMAIN_THRESHOLD,
+            },
+        )
+
+    return result
+
+
+# -----------------------------------------------------------------------------
 # Basic endpoints
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 @app.get("/")
 def root():
     return {
-        "message": "SteelVision API"
+        "message":
+            "SteelVision API",
+
+        "version":
+            "1.1.0",
     }
 
 
 @app.get("/health")
 def health():
     return {
-        "status": "ok"
+        "status":
+            "ok",
+
+        "classifier":
+            "ready",
+
+        "domain_validator":
+            "ready",
+
+        "domain_threshold":
+            DOMAIN_THRESHOLD,
     }
 
 
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Domain validation endpoint
+# -----------------------------------------------------------------------------
+
+@app.post(
+    "/validate-domain",
+    response_model=DomainValidationResponse,
+)
+async def validate_domain(
+    file: UploadFile = File(...),
+):
+    validate_file_type(
+        file
+    )
+
+    image = await read_image(
+        file
+    )
+
+    result = evaluate_domain(
+        image
+    )
+
+    return {
+        "filename":
+            file.filename,
+
+        "supported":
+            result[
+                "supported"
+            ],
+
+        "supported_probability":
+            round(
+                result[
+                    "supported_probability"
+                ],
+                6,
+            ),
+
+        "unsupported_probability":
+            round(
+                result[
+                    "unsupported_probability"
+                ],
+                6,
+            ),
+
+        "threshold":
+            DOMAIN_THRESHOLD,
+    }
+
+
+# -----------------------------------------------------------------------------
 # Classification endpoint
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 @app.post(
     "/predict",
@@ -252,21 +604,28 @@ async def predict(
         file
     )
 
-    input_array = preprocess_image(
+    # Phase 15 domain gate
+    ensure_supported_domain(
         image
     )
 
+    input_array = (
+        preprocess_classification_image(
+            image
+        )
+    )
+
     input_name = (
-        session
+        classification_session
         .get_inputs()[0]
         .name
     )
 
-    logits = session.run(
+    logits = classification_session.run(
         None,
         {
             input_name:
-            input_array
+                input_array
         },
     )[0]
 
@@ -298,7 +657,9 @@ async def predict(
 
     top_indices = np.argsort(
         probabilities
-    )[::-1][:3]
+    )[::-1][
+        :3
+    ]
 
     top_predictions = [
         {
@@ -306,6 +667,7 @@ async def predict(
                 CLASS_NAMES[
                     index
                 ],
+
             "probability":
                 round(
                     float(
@@ -346,9 +708,9 @@ async def predict(
     }
 
 
-# ----------------------------------------------------------------------------
-# Grad-CAM explainability endpoint
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Grad-CAM endpoint
+# -----------------------------------------------------------------------------
 
 @app.post(
     "/explain"
@@ -362,6 +724,11 @@ async def explain(
 
     image = await read_image(
         file
+    )
+
+    # Phase 15 domain gate
+    ensure_supported_domain(
+        image
     )
 
     try:
@@ -388,9 +755,9 @@ async def explain(
     )
 
 
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 # Localization endpoint
-# ----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
 
 @app.post(
     "/localize",
@@ -402,20 +769,6 @@ async def localize(
         "original"
     ),
 ):
-    """
-    Perform defect localization.
-
-    resolution options:
-
-    original
-        Use uploaded image without
-        artificial downsampling.
-
-    224 / 128 / 64 / 32
-        Simulate lower-resolution input
-        before YOLO localization.
-    """
-
     validate_file_type(
         file
     )
@@ -442,7 +795,7 @@ async def localize(
             status_code=400,
             detail=(
                 "Resolution must be one of: "
-                "original, 224, 128, 64, 32"
+                "original, 224, 128, 64, 32."
             ),
         )
 
@@ -456,6 +809,11 @@ async def localize(
 
     image = await read_image(
         file
+    )
+
+    # Phase 15 domain gate
+    ensure_supported_domain(
+        image
     )
 
     try:

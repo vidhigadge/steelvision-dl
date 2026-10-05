@@ -48,3 +48,8 @@ runs/
 
 # Generated explainability outputs
 outputs/
+
+data/domain_sources/
+data/domain_validation/
+
+data/clean_metal_source/
