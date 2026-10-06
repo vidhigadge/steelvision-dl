@@ -38,7 +38,7 @@ DOMAIN_MODEL_PATH = Path(
     "models/domain_validator_mobilenet_v3_small.pth"
 )
 
-DOMAIN_THRESHOLD = 0.90
+DOMAIN_THRESHOLD = 0.80
 
 CLASS_NAMES = [
     "crazing",

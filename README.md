@@ -1,190 +1,217 @@
 # SteelVision
 
-Deep learning research system for steel surface defect classification, explainability, localization, uncertainty analysis, and controlled resolution experiments.
+**An end-to-end deep learning research system for steel surface defect analysis: it validates the input, classifies the defect, explains and quantifies its confidence, localizes it, and studies how image resolution affects all of it.**
 
-SteelVision combines a fine-tuned ResNet-50 classifier, YOLO defect localization, Grad-CAM explainability, predictive uncertainty, coordinate mapping, ONNX deployment, a FastAPI backend, and a Streamlit interface into one end-to-end research prototype.
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?logo=python&logoColor=white)
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?logo=pytorch&logoColor=white)
+![ONNX](https://img.shields.io/badge/ONNX_Runtime-005CED?logo=onnx&logoColor=white)
+![YOLO](https://img.shields.io/badge/Ultralytics-YOLO-00FFFF)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![Streamlit](https://img.shields.io/badge/Streamlit-FF4B4B?logo=streamlit&logoColor=white)
+![Status](https://img.shields.io/badge/Status-Research_Prototype-blue)
 
----
-
-## Project Overview
-
-Steel surface defect inspection becomes more difficult when visual detail is reduced by lower image resolution.
-
-This project investigates how deep learning models behave under degraded-resolution conditions and whether enhancement techniques such as neural super-resolution improve downstream defect recognition.
-
-The project also extends beyond classification by integrating:
-
-- defect localization
-- explainable AI
-- uncertainty analysis
-- model optimization
-- coordinate mapping
-- API deployment
-- an interactive user interface
-
-The final application is called:
-
-```text
-SteelVision
-```
-
-The GitHub repository remains:
-
-```text
-steelvision-dl
-```
+<p align="center">
+  <img src="screenshot/dashboard.png" width="900" alt="SteelVision demo">
+</p>
 
 ---
 
-## Main Research Question
+## Table of Contents
 
-The central research question is:
-
-> Does neural super-resolution improve downstream steel defect classification under degraded image resolution compared with standard bicubic upscaling?
-
-The experiments also investigate:
-
-- how classification accuracy changes as image resolution decreases
-- whether visually sharper super-resolution images improve model performance
-- how defect localization changes under controlled resolution reduction
-- whether model confidence reflects actual image quality
-- how explainability and uncertainty can improve interpretation of model outputs
-- whether ONNX optimization can improve inference speed without reducing accuracy
+1. [Overview](#1-overview)
+2. [Results at a Glance](#2-results-at-a-glance)
+3. [System Architecture](#3-system-architecture)
+4. [Quick Start](#4-quick-start)
+5. [Dataset and Preprocessing](#5-dataset-and-preprocessing)
+6. [Step 1: Classification](#6-step-1-classification)
+7. [Step 2: Resolution Degradation](#7-step-2-resolution-degradation)
+8. [Step 3: Super-Resolution](#8-step-3-super-resolution)
+9. [Step 4: Defect Localization](#9-step-4-defect-localization)
+10. [Step 5: Explainability and Uncertainty](#10-step-5-explainability-and-uncertainty)
+11. [Step 6: Optimization with ONNX](#11-step-6-optimization-with-onnx)
+12. [Step 7: Robustness](#12-step-7-robustness)
+13. [Deployment: API and Interface](#13-deployment-api-and-interface)
+14. [Key Findings](#14-key-findings)
+15. [Limitations and Responsible Use](#15-limitations-and-responsible-use)
+16. [Project Reference](#16-project-reference)
+17. [Future Work](#17-future-work)
 
 ---
 
-## Supported Defect Classes
+## 1. Overview
 
-SteelVision works with six steel surface defect categories:
+Steel surface inspection becomes harder when visual detail is lost to low image resolution. SteelVision started from one research question:
+
+> **Does neural super-resolution improve downstream steel defect classification under degraded image resolution, compared with standard bicubic upscaling?**
+
+(Short answer: no. See [Step 3](#8-step-3-super-resolution).)
+
+Answering it properly meant building a full pipeline around the classifier. The project grew in stages:
+
+| Stage | What was added | Why |
+|---|---|---|
+| Classification | Fine-tuned ResNet-50 | A strong baseline to test the research question against |
+| Resolution study | Controlled degradation and Real-ESRGAN | The core research question |
+| Localization | YOLO detector and coordinate mapping | Show *where* a defect is, not just *what* it is |
+| Trust | Grad-CAM, SHAP, entropy | Make predictions interpretable and flag uncertain ones |
+| Deployment | ONNX, FastAPI, Streamlit | Turn experiments into a usable application |
+| Robustness | Cross-model agreement and a supported-domain gate | Handle model disagreement and unrelated inputs |
+
+**Supported defect classes:**
 
 ```text
-crazing
-inclusion
-patches
-pitted_surface
-rolled_in_scale
-scratches
+crazing · inclusion · patches · pitted_surface · rolled_in_scale · scratches
 ```
 
 ---
 
-# System Capabilities
+## 2. Results at a Glance
 
-The final SteelVision system provides:
-
-```text
-Classification
-Uncertainty Estimation
-Grad-CAM Explainability
-Defect Localization
-Coordinate Mapping
-Resolution Experimentation
-```
-
-The application contains two separate workflows:
-
-```text
-Standard Analysis
-Resolution Experiment
-```
+| Area | Result |
+|---|---|
+| Classification | **99.22%** test accuracy (253 / 255), fine-tuned ResNet-50 |
+| Resolution impact | Accuracy falls from 99.61% (224 px) to 31.76% (32 px) |
+| Super-resolution | Real-ESRGAN **underperformed** bicubic at every resolution |
+| Localization | YOLO26n: mAP@50 = 0.801, ~6.9 ms per image |
+| Calibration | Expected Calibration Error = 0.0482 |
+| Inference speed | ONNX Runtime is **1.58×** faster than PyTorch on CPU |
+| Model agreement | When YOLO detects, ResNet's class appears among its detections in **225 / 225** cases |
+| Domain gate | 0 false accepts and 0 false rejects on the constructed test set at threshold 0.80 |
 
 ---
 
-# Standard Analysis
+## 3. System Architecture
 
-Standard Analysis is the normal user-facing workflow.
+SteelVision combines four models, each with a distinct role:
 
-The uploaded image is analyzed as provided.
-
-The pipeline performs:
+| Model | Role |
+|---|---|
+| **MobileNetV3-Small** | Supported-domain validator: decides whether analysis should proceed |
+| **ResNet-50 (fine-tuned)** | Primary image-level defect classifier |
+| **YOLO26n** | Supporting localization: bounding boxes with per-region classes |
+| **Grad-CAM** | Explains which regions influenced the ResNet prediction |
 
 ```text
-image upload
-        ↓
-ResNet-50 classification
-        ↓
-confidence
-        ↓
-predictive entropy
-        ↓
-top defect predictions
-        ↓
-Grad-CAM explanation
-        ↓
-YOLO defect localization
-        ↓
-coordinate mapping
-        ↓
-mapped defect regions
+                         Uploaded Image
+                               │
+                               ▼
+                       Streamlit Frontend
+                               │
+                               ▼
+                        FastAPI Backend
+                               │
+                               ▼
+                    MobileNetV3-Small
+                  Supported-Domain Gate
+                               │
+                  supported_probability
+                               │
+                     threshold = 0.80
+                               │
+               ┌───────────────┴───────────────┐
+               │                               │
+               ▼                               ▼
+           Supported                        Rejected
+               │                               │
+               ▼                               ▼
+       ONNX ResNet-50                    Stop Analysis
+       Classification                     (HTTP 422)
+               │
+       ┌───────┼─────────┐
+       │       │         │
+       ▼       ▼         ▼
+  Confidence Entropy  Grad-CAM
+       │                 │
+       └────────┬────────┘
+                │
+                ▼
+               YOLO
+        Defect Localization
+                │
+                ▼
+     ResNet–YOLO Evidence Check
+                │
+       ┌────────┼────────┐
+       │        │        │
+       ▼        ▼        ▼
+   Matching   No Box   Different
+   Evidence   Found     Classes
+       │
+       ▼
+  Coordinate Mapping
+       │
+       ▼
+  Streamlit Visualization
 ```
 
-The user does not need to manually specify the image resolution.
+### Two workflows
+
+**Standard Analysis** is the normal workflow. Upload an image and the full pipeline above runs on it as provided. No resolution needs to be specified.
+
+**Resolution Experiment** is a research workflow. It resizes the *same* uploaded image to a controlled resolution (`224`, `128`, `64`, or `32`) and compares detection count, detector confidence, and bounding boxes against the baseline. The chosen resolution is an experimental setting and does **not** estimate physical camera distance.
 
 ---
 
-# Resolution Experiment
+## 4. Quick Start
 
-Resolution Experiment is a research workflow.
+### 1. Clone and install
 
-It intentionally adjusts the same uploaded image to a controlled resolution and compares localization behavior with the baseline image.
+Developed with Python 3.13.
 
-Available experimental resolutions are:
+```bash
+git clone https://github.com/vidhigadge/steelvision-dl.git
+cd steelvision-dl
 
-```text
-224
-128
-64
-32
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+
+python -m pip install --upgrade pip
+pip install -r requirements.txt
 ```
 
-The experiment evaluates how changes in available visual detail affect:
+### 2. Provide the model files
 
-```text
-detection count
-detector confidence
-bounding-box localization
+Trained weights are **not stored in the repository** (`*.pth`, `*.pt`, `*.onnx`, and `runs/` are git-ignored). Four files are needed:
+
+| File | Needed for | How to obtain |
+|---|---|---|
+| `models/resnet50_finetune.pth` | Grad-CAM | Train with `src/training/train_resnet_finetune.py` |
+| `models/resnet50_finetune.onnx` | `/predict` | `python -m src.optimization.export_onnx` (needs the `.pth`) |
+| `models/domain_validator_mobilenet_v3_small.pth` | Domain validation | `python -m src.models.train_domain_validator` |
+| `runs/detect/steel_defect_yolo/weights/best.pt` | Localization | Restore from your YOLO training run |
+
+<details>
+<summary><b>Recreate the domain-validation dataset</b></summary>
+
+```bash
+python -m src.data.prepare_domain_supported
+python -m src.data.prepare_domain_unsupported
+python -m src.data.prepare_mvtec_hard_negatives
 ```
 
-The selected resolution is an experimental setting.
+The generated folders (`data/domain_sources/`, `data/domain_validation/`, `data/clean_metal_source/`) are excluded from Git. The preparation scripts are version-controlled and reproducible.
 
-It does not estimate physical camera distance.
+</details>
+
+### 3. Run (two terminals)
+
+```bash
+# Terminal 1: FastAPI backend
+uvicorn src.api.main:app --reload
+
+# Terminal 2: Streamlit frontend
+streamlit run src/ui/app.py
+```
+
+- Backend: `http://127.0.0.1:8000`
+- Swagger docs: `http://127.0.0.1:8000/docs`
+- Streamlit prints its local URL on startup.
 
 ---
 
-# Dataset
+## 5. Dataset and Preprocessing
 
-The project uses steel surface defect data organized into six defect classes.
-
-For classification, the final dataset contained:
-
-```text
-1677 images
-```
-
-The classification split was created using:
-
-```text
-70% training
-15% validation
-15% testing
-```
-
-with:
-
-```text
-random seed = 42
-```
-
-Final split sizes:
-
-| Split | Images |
-|---|---:|
-| Training | 1172 |
-| Validation | 250 |
-| Test | 255 |
-| Total | 1677 |
-
-Class-wise distribution:
+The project uses **1677** steel surface defect images in six classes, split 70 / 15 / 15 with `random seed = 42`.
 
 | Class | Train | Validation | Test | Total |
 |---|---:|---:|---:|---:|
@@ -194,238 +221,78 @@ Class-wise distribution:
 | Pitted Surface | 182 | 39 | 40 | 261 |
 | Rolled-in Scale | 210 | 45 | 45 | 300 |
 | Scratches | 175 | 37 | 38 | 250 |
+| **Total** | **1172** | **250** | **255** | **1677** |
 
----
-
-# Classification Preprocessing
-
-Images are processed using:
+**Preprocessing** is identical for training, evaluation, and deployment:
 
 ```text
-grayscale conversion
-↓
-3-channel representation
-↓
-resize to 224 × 224
-↓
-tensor conversion
-↓
-ImageNet normalization
-```
-
-Normalization parameters:
-
-```text
-mean = [0.485, 0.456, 0.406]
-
-std = [0.229, 0.224, 0.225]
-```
-
-The same preprocessing pipeline is used during training, evaluation, and deployment.
-
----
-
-# Classification Models
-
-## Baseline CNN
-
-A small custom convolutional neural network was first trained as a baseline.
-
-The model uses convolutional blocks followed by pooling and fully connected layers.
-
-This provided an initial comparison point before transfer learning.
-
----
-
-## ResNet-50 Transfer Learning
-
-A pretrained ResNet-50 was then evaluated using ImageNet weights.
-
-The original backbone was initially frozen and the final classification layer was replaced for the six steel defect classes.
-
-Frozen ResNet-50 test accuracy:
-
-```text
-98.82%
+grayscale → 3 channels → resize 224×224 → tensor → ImageNet normalization
+mean = [0.485, 0.456, 0.406]     std = [0.229, 0.224, 0.225]
 ```
 
 ---
 
-## ResNet-50 Partial Fine-Tuning
+## 6. Step 1: Classification
 
-The final classifier uses partial fine-tuning.
+Three models were trained in sequence, each building on the last.
 
-Training strategy:
+| Model | Setup | Test accuracy |
+|---|---|---:|
+| Baseline CNN | Small custom CNN (conv blocks, pooling, fully connected layers) | Comparison baseline |
+| ResNet-50, frozen | ImageNet weights, backbone frozen, new 6-class head | 98.82% |
+| **ResNet-50, fine-tuned** | Most layers frozen, **`layer4` unfrozen**, new 6-class head | **99.22%** (253 / 255) |
 
-```text
-freeze most pretrained layers
-unfreeze layer4
-replace final classification layer
-train selected parameters
-```
-
-Final test result:
-
-```text
-253 / 255 correct
-```
-
-Test accuracy:
-
-```text
-99.22%
-```
-
-This model became the main classification model used throughout the later phases.
+The fine-tuned ResNet-50 became the primary classifier for every later step.
 
 ---
 
-# Resolution Degradation Study
+## 7. Step 2: Resolution Degradation
 
-The project evaluated classification performance as image resolution was reduced.
+With a strong classifier in place, the next question was how much resolution matters.
 
-The experiment followed:
+**Method:** original test image → bicubic downsample → bicubic resize back to 224×224 → ResNet-50.
 
-```text
-original test image
-↓
-bicubic downsample
-↓
-bicubic resize back to 224 × 224
-↓
-ResNet-50 classification
-```
+| Resolution | Accuracy | Drop vs 224 |
+|---|---:|---:|
+| 224 × 224 | 99.61% | n/a |
+| 128 × 128 | 83.92% | −15.69 pp |
+| 64 × 64 | 49.80% | −49.81 pp |
+| 32 × 32 | 31.76% | −67.85 pp |
 
-Results:
-
-| Resolution | Classification Accuracy |
-|---|---:|
-| 224 × 224 | 99.61% |
-| 128 × 128 | 83.92% |
-| 64 × 64 | 49.80% |
-| 32 × 32 | 31.76% |
-
-Accuracy drop relative to 224:
-
-| Resolution | Accuracy Drop |
-|---|---:|
-| 128 | 15.69 percentage points |
-| 64 | 49.81 percentage points |
-| 32 | 67.85 percentage points |
-
-The results show that classification performance decreases sharply as visual detail is removed.
-
-Upscaling the image dimensions afterward does not restore the information lost during downsampling.
+Accuracy collapses as detail is removed. Resizing back up afterward cannot restore information that was already lost.
 
 ---
 
-# Super-Resolution Study
+## 8. Step 3: Super-Resolution
 
-Neural super-resolution was evaluated using Real-ESRGAN.
+If detail is lost, can a neural network recover it? This is the central experiment. **Real-ESRGAN** reconstruction was compared against bicubic reconstruction, with the same ResNet-50 as the judge.
 
-The controlled pipeline compared:
-
-```text
-low-resolution image
-↓
-bicubic reconstruction
-
-versus
-
-low-resolution image
-↓
-Real-ESRGAN reconstruction
-```
-
-The same ResNet-50 classifier was then used for downstream evaluation.
-
----
-
-## Super-Resolution Results
-
-| Resolution | Bicubic Accuracy | Real-ESRGAN Accuracy | Difference |
+| Resolution | Bicubic | Real-ESRGAN | Difference |
 |---|---:|---:|---:|
-| 128 | 83.92% | 63.53% | -20.39 pp |
-| 64 | 49.80% | 41.18% | -8.62 pp |
-| 32 | 31.76% | 31.37% | -0.39 pp |
+| 128 × 128 | 83.92% | 63.53% | −20.39 pp |
+| 64 × 64 | 49.80% | 41.18% | −8.62 pp |
+| 32 × 32 | 31.76% | 31.37% | −0.39 pp |
 
-Real-ESRGAN did not improve downstream classification performance in this experiment.
-
-At every tested resolution, the neural super-resolution output performed worse than standard bicubic reconstruction.
-
----
-
-## Super-Resolution Interpretation
-
-A visually sharper image does not necessarily contain more useful discriminative information for a classifier.
-
-Possible explanations include:
+**Real-ESRGAN never beat bicubic.** Likely explanations are domain shift, artificial texture generation, feature distortion, and hallucinated detail.
 
 ```text
-domain shift
-artificial texture generation
-feature distortion
-hallucinated detail
-```
-
-Therefore:
-
-```text
-visual sharpness
-≠
-better classification accuracy
-```
-
-and:
-
-```text
-super-resolution
-≠
-guaranteed ground-truth recovery
+visual sharpness  ≠  better classification accuracy
+super-resolution  ≠  guaranteed ground-truth recovery
 ```
 
 The original image remains the authoritative observation.
 
 ---
 
-# Defect Localization
+## 9. Step 4: Defect Localization
 
-SteelVision uses a YOLO detector for defect localization.
-
-The detector was trained on a YOLO-formatted steel surface defect dataset.
-
-Training data:
+Classification says *what* the defect is. A **YOLO26n** detector adds *where*.
 
 ```text
-1770 training images
-30 validation images
+Training data:  1770 train images · 30 validation images (64 annotated instances)
+Configuration:  50 epochs · image size 640 · Apple MPS
+Inference:      ≈ 6.9 ms / image
 ```
-
-Validation set:
-
-```text
-64 annotated defect instances
-```
-
-Model:
-
-```text
-YOLO26n
-```
-
-Training configuration:
-
-```text
-50 epochs
-image size = 640
-Apple MPS acceleration
-```
-
----
-
-## Detection Results
-
-Overall validation results:
 
 | Metric | Result |
 |---|---:|
@@ -434,7 +301,8 @@ Overall validation results:
 | mAP@50 | 0.801 |
 | mAP@50-95 | 0.505 |
 
-Class-wise results:
+<details>
+<summary><b>Per-class detection results</b></summary>
 
 | Class | Precision | Recall | mAP@50 | mAP@50-95 |
 |---|---:|---:|---:|---:|
@@ -445,422 +313,343 @@ Class-wise results:
 | Rolled-in Scale | 0.501 | 0.667 | 0.584 | 0.317 |
 | Scratches | 0.578 | 0.857 | 0.828 | 0.697 |
 
-Observed detector inference time:
+</details>
+
+### Coordinate mapping
+
+YOLO boxes are produced in processed-image coordinates, so they are mapped back onto the uploaded image:
 
 ```text
-approximately 6.9 ms / image
-```
-
----
-
-# Coordinate Mapping
-
-YOLO detections are produced in processed-image coordinates.
-
-SteelVision maps these bounding boxes back to the uploaded image coordinate space.
-
-For:
-
-```text
-processed_width
-processed_height
-original_width
-original_height
-```
-
-the scaling factors are:
-
-```text
-scale_x = original_width / processed_width
-
+scale_x = original_width  / processed_width
 scale_y = original_height / processed_height
+
+mapped_x1 = x1 × scale_x      mapped_y1 = y1 × scale_y
+mapped_x2 = x2 × scale_x      mapped_y2 = y2 × scale_y
 ```
 
-Processed coordinates:
+The localization service builds an **800 × 800** processing image. This is the preprocessing size, **not** a guaranteed detector input size (the Ultralytics call does not force `imgsz=800`). The method assumes resize-based scaling and does not handle cropping, rotation, or perspective changes.
 
-```text
-(x1, y1, x2, y2)
-```
+### Localization under resolution change
 
-are mapped using:
-
-```text
-mapped_x1 = x1 × scale_x
-mapped_y1 = y1 × scale_y
-
-mapped_x2 = x2 × scale_x
-mapped_y2 = y2 × scale_y
-```
-
-This allows detected regions to be visualized correctly on the uploaded image.
-
-The current method assumes resize-based geometric scaling.
-
-It does not automatically handle arbitrary:
-
-```text
-cropping
-rotation
-perspective transformation
-complex geometric warping
-```
+YOLO still detects defects after resolution reduction, but confidence, boxes, and even the set of detections change. Some degraded images produced *higher* detector confidence than the originals, so **confidence does not equal image quality**.
 
 ---
 
-# Explainable AI
+## 10. Step 5: Explainability and Uncertainty
 
-SteelVision includes two explainability techniques:
+A prediction is more useful when you can see why it was made and how sure the model is.
 
-```text
-Grad-CAM
-SHAP
-```
+### Explainability
 
----
+| Method | Applied to | Notes |
+|---|---|---|
+| **Grad-CAM** | Fine-tuned ResNet-50, layer `model.layer4[-1]` | Highlights regions that influenced the predicted class. Available live through `/explain` |
+| **SHAP** | `shap.GradientExplainer` with a balanced training background set | Feature-attribution analysis; not part of training |
 
-## Grad-CAM
+Both show **model influence**, not physical proof of a defect mechanism.
 
-Grad-CAM is applied to the fine-tuned ResNet-50 classifier.
+### Uncertainty and calibration
 
-Target layer:
-
-```text
-model.layer4[-1]
-```
-
-Grad-CAM highlights image regions that influenced the predicted class.
-
-Example validation images from all six classes produced correct predictions during the explainability experiment.
-
-Grad-CAM should be interpreted as:
-
-```text
-model influence
-```
-
-not:
-
-```text
-physical proof of a defect mechanism
-```
-
----
-
-## SHAP
-
-SHAP was also evaluated using:
-
-```text
-shap.GradientExplainer
-```
-
-A balanced background set was created from training images.
-
-The SHAP experiment provides feature-attribution analysis for classifier behavior.
-
-SHAP is used as an explainability method and is not part of model training.
-
----
-
-# Uncertainty and Reliability
-
-SteelVision evaluates predictive confidence and entropy.
-
-On the 255-image test set:
-
-```text
-Correct predictions:   253
-
-Incorrect predictions: 2
-```
-
-Overall:
+Measured on the 255-image test set:
 
 | Metric | Result |
 |---|---:|
 | Accuracy | 99.22% |
-| Mean Confidence | 0.9471 |
-| Mean Entropy | 0.2083 |
+| Mean confidence | 0.9471 |
+| Mean entropy | 0.2083 |
 | Expected Calibration Error | 0.0482 |
 
-Correct predictions:
+| Group | Mean confidence | Mean entropy |
+|---|---:|---:|
+| Correct (253) | 0.9503 | 0.2019 |
+| Incorrect (2) | 0.5440 | 1.0096 |
 
-```text
-mean confidence = 0.9503
-mean entropy    = 0.2019
-```
+Wrong predictions carried much higher uncertainty, so entropy is a useful warning signal. The model is slightly underconfident overall (mean confidence is below accuracy).
 
-Incorrect predictions:
+The Streamlit interface turns entropy into a label. These are interface aids, not universal scientific thresholds:
 
-```text
-mean confidence = 0.5440
-mean entropy    = 1.0096
-```
-
-The incorrect predictions were associated with substantially higher uncertainty.
-
-The model was slightly underconfident overall because its mean confidence was below its observed accuracy.
+| Entropy | Label |
+|---|---|
+| < 0.5 | Low uncertainty |
+| 0.5 – 1.0 | Moderate uncertainty |
+| > 1.0 | Elevated uncertainty |
 
 ---
 
-## Entropy Interpretation
+## 11. Step 6: Optimization with ONNX
 
-The Streamlit interface uses simple interface-level thresholds:
+To make inference faster for deployment, the final ResNet-50 was exported to ONNX.
 
-```text
-Entropy < 0.5
-→ Low uncertainty
-
-0.5 ≤ Entropy ≤ 1.0
-→ Moderate uncertainty
-
-Entropy > 1.0
-→ Elevated uncertainty
-```
-
-These thresholds are intended only for user-interface interpretation.
-
-They are not universal scientific uncertainty thresholds.
-
----
-
-# ONNX Optimization
-
-The final ResNet-50 model was exported to ONNX.
-
-PyTorch and ONNX outputs were validated on the same input.
-
-Example comparison:
+**Fidelity check** on the same input:
 
 ```text
-PyTorch confidence:
-0.967897
-
-ONNX confidence:
-0.967895
-
-Maximum probability difference:
-0.00000232
+PyTorch confidence:   0.967897
+ONNX confidence:      0.967895
+Max probability diff: 0.00000232        Prediction agreement: True
 ```
 
-Prediction agreement:
-
-```text
-True
-```
-
----
-
-## CPU Inference Benchmark
-
-Benchmark configuration:
-
-```text
-20 warm-up runs
-100 measured runs
-CPU inference
-```
-
-Results:
+**CPU benchmark** (20 warm-up runs, 100 measured runs):
 
 | Runtime | Latency |
 |---|---:|
 | PyTorch | 19.883 ms / image |
 | ONNX Runtime | 12.590 ms / image |
+| **Speedup** | **1.58×** |
 
-Observed ONNX speedup:
+**INT8 quantization was tested and rejected.** It shrank the model but cost too much accuracy against the 99.22% FP32 baseline:
 
-```text
-1.58×
-```
+| Variant | Accuracy |
+|---|---:|
+| QInt8 / QInt8 | 92.94% |
+| U8 / U8 (preprocessing-aware calibration) | 61.57% |
+| Balanced calibration | 54.90% |
 
-The FP32 ONNX model preserved classifier accuracy while improving CPU inference speed.
-
----
-
-# INT8 Quantization
-
-Static INT8 quantization was also evaluated.
-
-The INT8 model reduced model size substantially but produced unacceptable accuracy degradation.
-
-Tested configurations included:
-
-```text
-QInt8 / QInt8
-balanced calibration
-U8 / U8 preprocessing-aware calibration
-```
-
-Observed accuracies included:
-
-```text
-92.94%
-54.90%
-61.57%
-```
-
-compared with:
-
-```text
-99.22%
-```
-
-for the FP32 classifier.
-
-Therefore, the final deployment decision was:
-
-```text
-retain FP32 ONNX
-```
-
-rather than use INT8 quantization.
+**Decision:** deploy FP32 ONNX. PyTorch is kept only for Grad-CAM, which needs internal convolutional activations.
 
 ---
 
-# FastAPI Backend
+## 12. Step 7: Robustness
 
-SteelVision uses FastAPI as the inference backend.
+Once the application worked, two reliability problems remained. Both were addressed in the final phase (EXP-015).
 
-Main file:
+### 12.1 ResNet and YOLO can disagree
+
+The two models solve different tasks and were trained separately. Rather than hide disagreement, SteelVision measured it on the **255-image test split**.
+
+| Metric | Result |
+|---|---:|
+| ResNet-50 correct | 253 / 255 (99.22%) |
+| YOLO top-class correct | 224 / 255 (87.84%) |
+| YOLO any-detection correct | 225 / 255 (88.24%) |
+| Top-class agreement | 223 / 255 (87.45%) |
+| Any-detection agreement | 225 / 255 (88.24%) |
+| YOLO no detection | 30 |
+| YOLO multi-class detection | 5 |
+
+**The key result is conditional.** YOLO produced at least one detection on 225 of 255 images. Among those:
+
+| Conditional metric | Result |
+|---|---:|
+| ResNet's class appears among YOLO detections | **225 / 225 (100%)** |
+| YOLO's top class matches ResNet | 223 / 225 (99.11%) |
+
+So most apparent disagreement was **YOLO producing no box**, not contradictory predictions. The gaps concentrate in `crazing` (21 no-detections) and `rolled_in_scale` (8).
+
+<details>
+<summary><b>Per-class agreement</b></summary>
+
+| Class | Total | ResNet correct | YOLO top correct | YOLO any correct | No detection | Multi-class |
+|---|---:|---:|---:|---:|---:|---:|
+| crazing | 45 | 45 | 24 | 24 | 21 | 0 |
+| inclusion | 45 | 45 | 45 | 45 | 0 | 0 |
+| patches | 42 | 42 | 42 | 42 | 0 | 0 |
+| pitted_surface | 40 | 40 | 40 | 40 | 0 | 2 |
+| rolled_in_scale | 45 | 45 | 37 | 37 | 8 | 0 |
+| scratches | 38 | 36 | 36 | 37 | 1 | 3 |
+
+</details>
+
+<details>
+<summary><b>Notable disagreement examples (scratches)</b></summary>
+
+| Image | Ground truth | ResNet | YOLO |
+|---|---|---|---|
+| `scratches_150.jpg` | scratches | scratches (96.28%) | top: inclusion (74.24%), but also detected scratches |
+| `scratches_44.jpg` | scratches | inclusion (69.17%) ✗ | no detection |
+| `scratches_70.jpg` | scratches | inclusion (39.63%) ✗ | top: scratches (63.76%); detections: scratches, scratches, inclusion |
+
+`scratches_70.jpg` shows why classifier uncertainty and detector evidence should be read together.
+
+</details>
+
+**Resulting policy:** ResNet-50 is the primary image-level classifier; YOLO is supporting spatial evidence.
+
+| Case | Behavior |
+|---|---|
+| YOLO detects the ResNet class | Matching boxes shown as **primary localization evidence** |
+| YOLO produces no detection | Classification stays visible; localization reported as **unavailable** (not a classifier failure) |
+| YOLO detects only other classes | **Cross-model inconsistency warning** |
+| YOLO detects several classes | Matching → primary evidence; non-matching → **additional detector observations** |
+
+The models are never forced into artificial agreement.
+
+### 12.2 Unrelated images still get a defect label
+
+ResNet-50 is **closed-set**: it knows only six defect classes and has no `normal`, `unknown`, or `non-steel` class. Shown a photo of a car, it still picks one of the six.
+
+**Solution:** a separate **MobileNetV3-Small** binary validator predicts `supported` or `unsupported` *before* any defect analysis. It is deliberately called a **supported-domain validator**, not a universal steel / non-steel detector, because its training data cannot support that claim.
+
+**Domain-validation dataset:**
+
+| Split | Supported (NEU) | Unsupported: Caltech-101 | Unsupported: MVTec hard negatives | Total |
+|---|---:|---:|---:|---:|
+| Train | 1172 | 1000 | 300 | 2472 |
+| Validation | 250 | 200 | 60 | 510 |
+| Test | 255 | 200 | 60 | 515 |
+
+- **Supported:** the existing classification split, unchanged.
+- **Generic unsupported:** a deterministic Caltech-101 subset (seed 42).
+- **Industrial hard negatives:** defect-free MVTec AD images (`grid`, `hazelnut`), added so the task isn't trivially easy.
+- **Shortcut prevention:** NEU images are grayscale while Caltech is often color, so everything is converted to 3-channel grayscale. This blocks the shortcut `grayscale → supported`.
+
+<details>
+<summary><b>Validator training configuration</b></summary>
 
 ```text
-src/api/main.py
+Architecture:   MobileNetV3-Small (pretrained, 2-way head)
+Input size:     224 × 224
+Batch size:     32
+Epochs:         10
+Optimizer:      Adam
+Learning rate:  0.0001
+Loss:           CrossEntropyLoss
+Device:         Apple MPS
+Seed:           42
+Augmentation:   RandomHorizontalFlip, RandomVerticalFlip, RandomRotation(10°)
+Class mapping:  {'supported': 0, 'unsupported': 1}
+Training time:  185.7 s
 ```
 
-Available endpoints:
+</details>
+
+**Results:** best validation accuracy **100.00%**; test accuracy **99.81%** at the default 0.50 threshold.
 
 ```text
-GET  /
-GET  /health
-POST /predict
-POST /explain
-POST /localize
+                     Predicted
+                 supported   unsupported
+Actual supported      255            0
+Actual unsupported      1          259
 ```
+
+**Choosing the threshold.** The supported-class probability distributions were analyzed before deployment:
+
+| Threshold | Val accuracy | Test accuracy | Test false accepts | Test false rejects |
+|---:|---:|---:|---:|---:|
+| 0.50 | 100.00% | 99.81% | 1 | 0 |
+| 0.70 | 100.00% | 99.81% | 1 | 0 |
+| **0.80** | **100.00%** | **100.00%** | **0** | **0** |
+| 0.90 | 100.00% | 100.00% | 0 | 0 |
+| 0.97 | 100.00% | 100.00% | 0 | 0 |
+| 0.98 | 100.00% | 99.81% | 0 | 1 |
+| 0.99 | 99.80% | 99.81% | 0 | 1 |
+
+The single low-threshold false accept (`caltech__0110.jpg`) scored **0.7736**, so it is rejected at 0.80 but accepted at 0.70.
+
+**Why 0.80 and not 0.90.** The first deployment threshold was 0.90, which was perfect on the constructed sets. But real steel images from *outside* NEU scored roughly **0.60 – 0.80** and were wrongly rejected. This exposed domain shift (lighting, camera distance, cropping, surface finish, texture, compression, defect scale, contrast). 0.80 was chosen because it stays perfect on the constructed sets, still rejects the known false accept, accepts more real-world steel than 0.90, and is stricter than 0.70.
+
+```text
+supported_probability >= 0.80   →  analysis proceeds
+otherwise                       →  analysis stopped
+```
+
+> 0.80 is dataset-dependent and should be recalibrated if the validator is retrained, new steel data is added, or preprocessing changes.
 
 ---
 
-## `/predict`
+## 13. Deployment: API and Interface
 
-Uses:
+### FastAPI backend
 
-```text
-FP32 ONNX ResNet-50
-```
+`src/api/main.py` exposes the pipeline as an inference API.
 
-Returns:
+| Endpoint | Model | Returns |
+|---|---|---|
+| `GET /` | n/a | Service info |
+| `GET /health` | n/a | `status`, `classifier`, `domain_validator`, `domain_threshold` |
+| `POST /validate-domain` | MobileNetV3-Small | `filename`, `supported`, `supported_probability`, `unsupported_probability`, `threshold` |
+| `POST /predict` | ONNX ResNet-50 (FP32) | Predicted class, confidence, entropy, top-3 predictions |
+| `POST /explain` | PyTorch ResNet-50 | Live Grad-CAM explanation |
+| `POST /localize` | YOLO | Detections, coordinate mapping, optional resolution experiment (`original`, `224`, `128`, `64`, `32`) |
 
-```text
-predicted class
-confidence
-entropy
-top-3 predictions
-```
+**Server-side enforcement:** `/predict`, `/explain`, and `/localize` each run domain validation internally and return **HTTP 422** if `supported_probability < 0.80`. The rule cannot be bypassed by calling the API directly.
 
----
+### Streamlit interface
 
-## `/explain`
+`src/ui/app.py` is the user-facing dashboard. It calls `/validate-domain` first, then presents:
 
-Uses:
+- classification, confidence, entropy, and top predictions
+- Grad-CAM visualization
+- YOLO localization with coordinate mapping
+- cross-model evidence panels: *Primary Localization Evidence*, *All Detector Observations*, *Additional Detector Observations*
+- resolution experiments, backend status, and model information
 
-```text
-PyTorch ResNet-50
-```
+**Supported input** shows "Supported Input" with the probability and threshold, then continues with the full analysis. **Unsupported input** shows "Unsupported Input: Analysis Stopped" and runs nothing further.
 
-to generate live Grad-CAM explanations.
-
-The PyTorch model is retained because Grad-CAM requires access to internal convolutional activations.
-
----
-
-## `/localize`
-
-Uses:
-
-```text
-YOLO
-```
-
-for defect localization.
-
-It also performs:
-
-```text
-coordinate mapping
-resolution experimentation
-```
-
-Supported resolution parameters:
-
-```text
-original
-224
-128
-64
-32
-```
+The wording is deliberately careful: the app never says "this is not steel", only that the image does not sufficiently resemble SteelVision's supported analysis domain.
 
 ---
 
-# Streamlit Interface
+## 14. Key Findings
 
-The user-facing application is implemented in:
-
-```text
-src/ui/app.py
-```
-
-The dashboard integrates:
-
-```text
-classification
-confidence
-entropy
-Grad-CAM
-defect localization
-coordinate mapping
-resolution experiments
-backend status
-model information
-```
-
-The interface uses a dark industrial design intended for technical inspection workflows.
+1. **Transfer learning worked.** Fine-tuned ResNet-50 reached 99.22% test accuracy.
+2. **Resolution is critical.** Accuracy dropped from 99.61% to 31.76% as resolution fell from 224 to 32.
+3. **Super-resolution did not help.** Real-ESRGAN lost to bicubic at every resolution; sharper images are not more informative to a classifier.
+4. **Localization is resolution-sensitive.** Confidence, boxes, and detections all shift, and higher confidence does not mean better image quality.
+5. **Uncertainty flags hard cases.** Incorrect predictions had lower confidence and higher entropy.
+6. **Explainability aids interpretation** but gives no causal physical explanation.
+7. **ONNX improved efficiency.** FP32 ONNX kept accuracy and cut CPU latency by about 1.58×; INT8 was unsuitable.
+8. **ResNet and YOLO need different roles.** ResNet is primary; YOLO is supporting evidence; a missing box does not invalidate a classification.
+9. **Detected cases were highly consistent.** When YOLO fired, the ResNet class appeared among its detections in 225 / 225 cases.
+10. **Closed-set classifiers need an abstention mechanism.** The domain validator stops unsupported inputs from receiving defect labels.
+11. **Benchmarks hide domain shift.** External steel images scored 0.60 – 0.80 on the validator, which is why the threshold moved from 0.90 to 0.80.
 
 ---
 
-# Application Architecture
+## 15. Limitations and Responsible Use
 
-```text
-                    SteelVision
-                         │
-                         ▼
-                Streamlit Frontend
-                         │
-                         ▼
-                  FastAPI Backend
-                         │
-          ┌──────────────┼──────────────┐
-          │              │              │
-          ▼              ▼              ▼
-   ONNX ResNet-50   PyTorch ResNet-50   YOLO
-          │              │              │
-          ▼              ▼              ▼
- Classification      Grad-CAM       Localization
-          │                              │
-          ▼                              ▼
- Confidence                     Bounding Boxes
- Entropy                              │
- Top Predictions                      ▼
-                               Coordinate Mapping
-          │                              │
-          └──────────────┬───────────────┘
-                         ▼
-                SteelVision Dashboard
-```
+SteelVision is a **research prototype**, not an autonomous industrial safety system.
+
+**Limitations**
+
+- **Data:** trained on limited steel datasets; other acquisition conditions can differ substantially, and few clean sheet-steel images from a target environment are available.
+- **Domain validation:** not a universal steel / non-steel or out-of-distribution detector. The unsupported space is effectively unlimited, dataset shortcuts may remain, and the 0.80 threshold may need recalibration.
+- **Classification:** no dedicated *normal steel* class, so it is not a normal-vs-defective inspection system. One primary class per image.
+- **Localization:** YOLO may miss defects ResNet classifies correctly (notably crazing and rolled-in scale). Coordinate mapping assumes resize-based geometry.
+- **Cross-model:** disagreement does not reveal which model is correct, and agreement does not guarantee correctness.
+- **Interpretation:** Grad-CAM and SHAP show model influence, not causality. Confidence and entropy do not guarantee reliability. Resolution simulation does not estimate camera distance. Real-ESRGAN detail is not ground truth.
+- **Deployment:** model checkpoints are not in the repository; designed for local use with no authentication or production hardening.
+
+**What it can and cannot do**
+
+| It can | It does not |
+|---|---|
+| Check whether an image resembles its supported domain | Guarantee an image is steel |
+| Classify visible supported defect patterns | Guarantee steel is defect-free |
+| Estimate classifier uncertainty | Recover detail lost to distance |
+| Highlight model-influential regions | Estimate physical defect depth |
+| Localize visible defect regions | Provide validated engineering severity |
+| Compare classification and localization evidence | Replace professional inspection |
+| Study controlled resolution effects | Prove causal defect mechanisms or guarantee correctness |
+
+> SteelVision is a multi-model steel surface defect analysis research system that first validates whether an uploaded image sufficiently resembles its supported defect-analysis domain, then performs image-level classification, uncertainty estimation, explainability, and spatial defect localization while preserving cross-model disagreement.
 
 ---
 
-# Project Structure
+## 16. Project Reference
+
+### Experiment log
+
+Each experiment has a detailed write-up in [`experiments/`](experiments/).
+
+| ID | Description |
+|---|---|
+| EXP-001 | Baseline CNN |
+| EXP-002 | ResNet-50 transfer learning |
+| EXP-003 | ResNet-50 partial fine-tuning |
+| EXP-004 | Resolution degradation |
+| EXP-005 | Bicubic vs Real-ESRGAN at 64×64 |
+| EXP-006 | Super-resolution downstream evaluation |
+| EXP-007 | Steel surface defect detection with YOLO26n |
+| EXP-008 | Bounding-box coordinate mapping to original image space |
+| EXP-009 | Explainable AI with Grad-CAM and SHAP |
+| EXP-010 | Uncertainty and reliability analysis |
+| EXP-011 | Model export, optimization, and quantization |
+| EXP-012 | FastAPI inference backend |
+| EXP-013 | Streamlit application integration |
+| EXP-014 | Final evaluation, documentation, and project completion |
+| EXP-015 | Robustness, cross-model agreement, and supported-domain validation |
+
+### Project structure
 
 ```text
 steelvision-dl/
@@ -869,20 +658,7 @@ steelvision-dl/
 │   ├── detection.yaml
 │   └── splits/
 │
-├── experiments/
-│   ├── EXP-001.md
-│   ├── EXP-002.md
-│   ├── EXP-003.md
-│   ├── EXP-004.md
-│   ├── EXP-005.md
-│   ├── EXP-006.md
-│   ├── EXP-007.md
-│   ├── EXP-008.md
-│   ├── EXP-009.md
-│   ├── EXP-010.md
-│   ├── EXP-011.md
-│   ├── EXP-012.md
-│   └── EXP-013.md
+├── experiments/                 # EXP-001 … EXP-015 write-ups
 │
 ├── notebooks/
 │   └── 01_dataset_exploration.ipynb
@@ -890,54 +666,50 @@ steelvision-dl/
 ├── src/
 │   ├── api/
 │   │   └── main.py
-│   │
 │   ├── data/
 │   │   ├── create_splits.py
 │   │   ├── dataset_stats.py
 │   │   ├── degradation.py
-│   │   └── loaders.py
-│   │
+│   │   ├── loaders.py
+│   │   ├── prepare_domain_supported.py
+│   │   ├── prepare_domain_unsupported.py
+│   │   └── prepare_mvtec_hard_negatives.py
 │   ├── detection/
 │   │   ├── coordinate_mapping.py
 │   │   ├── localization_service.py
 │   │   └── test_mapping.py
-│   │
 │   ├── evaluation/
 │   │   ├── evaluate_cnn.py
 │   │   ├── evaluate_resnet.py
 │   │   ├── evaluate_resnet_finetune.py
 │   │   ├── evaluate_resolution.py
-│   │   └── evaluate_sr.py
-│   │
+│   │   ├── evaluate_sr.py
+│   │   ├── evaluate_model_agreement.py
+│   │   └── evaluate_domain_threshold.py
 │   ├── explainability/
 │   │   ├── gradcam.py
 │   │   ├── gradcam_service.py
 │   │   └── shap_explain.py
-│   │
 │   ├── models/
 │   │   ├── cnn.py
 │   │   ├── resnet50.py
-│   │   └── resnet50_finetune.py
-│   │
+│   │   ├── resnet50_finetune.py
+│   │   └── train_domain_validator.py
 │   ├── optimization/
 │   │   ├── benchmark_inference.py
 │   │   ├── evaluate_int8.py
 │   │   ├── export_onnx.py
 │   │   ├── quantize_onnx.py
 │   │   └── validate_onnx.py
-│   │
 │   ├── reliability/
 │   │   ├── calibration.py
 │   │   └── uncertainty.py
-│   │
 │   ├── super_resolution/
 │   │   └── generate_lr.py
-│   │
 │   ├── training/
 │   │   ├── train_cnn.py
 │   │   ├── train_resnet.py
 │   │   └── train_resnet_finetune.py
-│   │
 │   └── ui/
 │       └── app.py
 │
@@ -946,498 +718,44 @@ steelvision-dl/
 └── requirements.txt
 ```
 
----
+### Tech stack
 
-# Experiment Log
-
-The project maintains a complete experiment record.
-
-| Experiment | Description |
+| Area | Tools |
 |---|---|
-| EXP-001 | Baseline CNN |
-| EXP-002 | ResNet-50 Transfer Learning |
-| EXP-003 | ResNet-50 Partial Fine-Tuning |
-| EXP-004 | Resolution Degradation |
-| EXP-005 | Bicubic vs Real-ESRGAN at 64×64 |
-| EXP-006 | Super-Resolution Downstream Evaluation |
-| EXP-007 | Steel Surface Defect Detection with YOLO26n |
-| EXP-008 | Bounding Box Coordinate Mapping to Original Image Space |
-| EXP-009 | Explainable AI with Grad-CAM and SHAP |
-| EXP-010 | Uncertainty and Reliability Analysis |
-| EXP-011 | Model Export, Optimization, and Quantization |
-| EXP-012 | FastAPI Inference Backend |
-| EXP-013 | Streamlit Application Integration |
+| Deep learning | Python, PyTorch, torchvision, MobileNetV3-Small, ResNet-50, Ultralytics YOLO |
+| Explainability | Grad-CAM, SHAP |
+| Optimization | ONNX, ONNX Runtime |
+| Backend | FastAPI, Uvicorn |
+| Frontend | Streamlit |
+| Data and analysis | NumPy, Pandas, Matplotlib, scikit-learn, OpenCV, Pillow, Jupyter |
 
-Detailed methodology and results are available in the `experiments/` directory.
+**Environment:** MacBook Air (Apple M4), Python 3.13 virtual environment, Metal Performance Shaders where supported.
 
 ---
 
-# Installation
+## 17. Future Work
 
-## 1. Clone the Repository
-
-```bash
-git clone https://github.com/vidhigadge/steelvision-dl.git
-cd steelvision-dl
-```
-
----
-
-## 2. Create a Virtual Environment
-
-The project was developed and tested using Python 3.13.
-
-```bash
-python3 -m venv .venv
-```
-
-Activate it on macOS/Linux:
-
-```bash
-source .venv/bin/activate
-```
-
-On Windows:
-
-```bash
-.venv\Scripts\activate
-```
+- Larger, more diverse industrial steel datasets, including representative defect-free steel
+- A dedicated normal-steel class and stronger open-set detection
+- Retraining the domain validator on external real-world steel imagery
+- Domain-specific super-resolution (SwinIR or other transformer-based restoration)
+- Segmentation-based defect localization and a larger YOLO training set
+- Better confidence calibration and disagreement-aware decision logic
+- ONNX export for the domain validator and automated model-weight distribution
+- Cloud deployment with authentication and monitoring
+- Robustness tests under blur, noise, compression, lighting, and perspective changes
+- Severity estimation validated against expert-labelled engineering data
 
 ---
 
-## 3. Install Dependencies
+## Conclusion
 
-```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
+SteelVision progressed from a simple CNN baseline to a multi-model research and application pipeline. Its strongest classifier reached 99.22% test accuracy, yet accuracy fell sharply with resolution, and the super-resolution study produced a clear negative result: **Real-ESRGAN made images look better but did not make classification better.** The robustness work then showed that classifiers and detectors should have distinct roles, and that closed-set models need a way to decline unsupported inputs.
 
----
-
-# Required Model Files
-
-Large trained model artifacts are not stored in GitHub.
-
-The `.gitignore` excludes:
-
-```text
-*.pth
-*.pt
-*.onnx
-runs/
-```
-
-To run the complete application, the following model files must exist locally.
+The result is an application that validates, classifies, explains, localizes, and cross-checks its own evidence, while stating plainly what it cannot do.
 
 ---
 
-## Classification Checkpoint
+## Author
 
-Required for Grad-CAM:
-
-```text
-models/resnet50_finetune.pth
-```
-
----
-
-## ONNX Classifier
-
-Required for `/predict`:
-
-```text
-models/resnet50_finetune.onnx
-```
-
-It can be generated using:
-
-```bash
-python -m src.optimization.export_onnx
-```
-
-provided that the PyTorch checkpoint is already available.
-
----
-
-## YOLO Detector
-
-Required for localization:
-
-```text
-runs/detect/steel_defect_yolo/weights/best.pt
-```
-
-This checkpoint is generated after YOLO training.
-
-Because `runs/` is ignored by Git, the checkpoint must be restored separately when cloning the repository onto another machine.
-
----
-
-# Running SteelVision
-
-The application requires two terminals.
-
----
-
-## Terminal 1 — Start FastAPI
-
-From the project root with the virtual environment activated:
-
-```bash
-uvicorn src.api.main:app --reload
-```
-
-Backend:
-
-```text
-http://127.0.0.1:8000
-```
-
-Swagger documentation:
-
-```text
-http://127.0.0.1:8000/docs
-```
-
----
-
-## Terminal 2 — Start Streamlit
-
-From the project root with the same virtual environment activated:
-
-```bash
-streamlit run src/ui/app.py
-```
-
-Streamlit will display a local browser address after startup.
-
----
-
-# Main Results Summary
-
-| Experiment | Main Result |
-|---|---|
-| Fine-tuned ResNet-50 | 99.22% test accuracy |
-| 128 px degradation | 83.92% accuracy |
-| 64 px degradation | 49.80% accuracy |
-| 32 px degradation | 31.76% accuracy |
-| Real-ESRGAN at 128 px | 63.53% |
-| Real-ESRGAN at 64 px | 41.18% |
-| Real-ESRGAN at 32 px | 31.37% |
-| YOLO mAP@50 | 0.801 |
-| YOLO mAP@50-95 | 0.505 |
-| Expected Calibration Error | 0.0482 |
-| PyTorch CPU inference | 19.883 ms/image |
-| ONNX CPU inference | 12.590 ms/image |
-| ONNX speedup | 1.58× |
-
----
-
-# Key Research Findings
-
-## 1. Transfer learning was highly effective
-
-The fine-tuned ResNet-50 achieved:
-
-```text
-99.22% test accuracy
-```
-
-which substantially outperformed the need for a purely custom baseline model.
-
----
-
-## 2. Reduced resolution strongly affected classification
-
-Classification accuracy decreased from:
-
-```text
-99.61%
-```
-
-at full resolution to:
-
-```text
-31.76%
-```
-
-at 32 × 32 resolution.
-
-This confirms that important discriminative information is lost as image resolution decreases.
-
----
-
-## 3. Neural super-resolution did not improve classification
-
-Real-ESRGAN produced lower downstream classification accuracy than bicubic reconstruction at every tested resolution.
-
-The experiment therefore does not support the assumption that visually enhanced super-resolution images necessarily improve defect recognition.
-
----
-
-## 4. Localization remained possible under controlled resolution changes
-
-YOLO localization could still detect defect regions after resolution adjustment, but:
-
-```text
-confidence changed
-bounding boxes changed
-detections could change
-```
-
-These changes demonstrate that localization behavior is sensitive to input resolution.
-
----
-
-## 5. Higher confidence does not imply better image quality
-
-Some degraded images produced higher detector confidence than their original counterparts.
-
-Therefore:
-
-```text
-higher model confidence
-≠
-better image quality
-```
-
----
-
-## 6. Explainability improves interpretation
-
-Grad-CAM and SHAP provide insight into which image regions and features influence classification.
-
-These methods improve model interpretability but do not provide causal physical explanations.
-
----
-
-## 7. Uncertainty helped distinguish difficult predictions
-
-Incorrect classifier predictions showed:
-
-```text
-lower confidence
-higher entropy
-```
-
-than correct predictions on average.
-
-This supports using uncertainty indicators alongside class predictions.
-
----
-
-## 8. ONNX improved deployment efficiency
-
-FP32 ONNX inference preserved classification performance and reduced CPU inference latency by approximately:
-
-```text
-1.58×
-```
-
----
-
-## 9. INT8 quantization was not suitable for the final deployment
-
-Although quantization reduced model size, the tested INT8 configurations produced substantial accuracy degradation.
-
-The final deployment therefore retains:
-
-```text
-FP32 ONNX
-```
-
----
-
-# Limitations
-
-SteelVision is a research prototype and has several limitations.
-
-- The models were trained on a limited steel defect dataset.
-- Performance on unseen industrial environments may differ.
-- The classifier predicts one primary class per image.
-- YOLO localization depends on the quality of the available bounding-box annotations.
-- The detector checkpoint is not stored in the repository.
-- The classification and ONNX checkpoints are not stored in the repository.
-- Coordinate mapping currently assumes resize-based geometric transformation.
-- Complex cropping, perspective changes, and rotation are not automatically handled.
-- Grad-CAM indicates model influence rather than physical causality.
-- SHAP explanations remain model-derived.
-- Confidence does not guarantee correctness.
-- Predictive entropy does not guarantee reliability.
-- Resolution simulation does not estimate real-world camera distance.
-- Upscaling image dimensions does not restore guaranteed lost detail.
-- Real-ESRGAN can generate visually plausible detail that is not guaranteed to represent ground truth.
-- Neural super-resolution was not shown to improve downstream classification in the current experiments.
-- The application is currently designed for local execution.
-- Authentication and production security controls are not implemented.
-
----
-
-# Responsible Interpretation
-
-SteelVision should not be interpreted as an autonomous industrial safety system.
-
-The system can:
-
-```text
-evaluate steel surface imagery
-classify visible defect patterns
-estimate uncertainty
-highlight model-influential regions
-localize visible defect regions
-map detections to uploaded-image coordinates
-study resolution effects
-```
-
-It does not:
-
-```text
-recover guaranteed detail lost because of distance
-estimate physical defect depth or severity
-replace engineering inspection
-prove causal defect mechanisms
-guarantee prediction correctness
-```
-
-The correct interpretation is:
-
-> SteelVision can evaluate low-resolution imagery, optionally study controlled resolution changes, detect visible defect regions, and map localization coordinates back to the original image space.
-
----
-
-# Technology Stack
-
-Core deep learning:
-
-```text
-Python
-PyTorch
-torchvision
-ResNet-50
-Ultralytics YOLO
-```
-
-Explainability:
-
-```text
-Grad-CAM
-SHAP
-```
-
-Optimization:
-
-```text
-ONNX
-ONNX Runtime
-```
-
-Backend:
-
-```text
-FastAPI
-Uvicorn
-```
-
-Frontend:
-
-```text
-Streamlit
-```
-
-Data and analysis:
-
-```text
-NumPy
-Pandas
-Matplotlib
-scikit-learn
-OpenCV
-Pillow
-Jupyter
-```
-
----
-
-# Development Environment
-
-The project was developed on:
-
-```text
-MacBook Air
-Apple M4
-```
-
-with:
-
-```text
-Python 3.13.5
-PyTorch 2.14.0
-torchvision 0.29.0
-```
-
-Apple Metal Performance Shaders were used where supported during model training and inference experiments.
-
----
-
-# Future Work
-
-Potential extensions include:
-
-- evaluation on larger industrial datasets
-- domain-specific super-resolution training
-- SwinIR or other transformer-based restoration models
-- segmentation-based defect localization
-- larger and more diverse YOLO training data
-- confidence calibration improvements
-- automated model-weight distribution
-- ONNX optimization for additional components
-- cloud deployment
-- production authentication and monitoring
-- robustness evaluation under blur, noise, compression, lighting variation, and perspective changes
-- physically validated severity estimation using expert-labelled engineering data
-
----
-
-# Conclusion
-
-SteelVision demonstrates an end-to-end deep learning workflow for steel surface defect analysis.
-
-The project progressed from a simple CNN baseline to a complete research and application pipeline containing:
-
-```text
-transfer learning
-fine-tuning
-resolution degradation analysis
-super-resolution evaluation
-defect localization
-coordinate mapping
-explainable AI
-uncertainty analysis
-ONNX optimization
-FastAPI deployment
-Streamlit integration
-```
-
-The strongest classification model achieved:
-
-```text
-99.22% test accuracy
-```
-
-However, classification performance degraded substantially as image resolution decreased.
-
-The super-resolution experiments provided an important negative result:
-
-> Real-ESRGAN produced visually enhanced images but did not improve downstream classification compared with bicubic reconstruction.
-
-This demonstrates that perceptual image quality and model utility are not necessarily equivalent.
-
-The final SteelVision application integrates classification, uncertainty, explainability, localization, coordinate mapping, and controlled resolution experiments into one interface while preserving the scientific limitations identified during the research process.
-
----
-
-## Repository
-
-```text
-https://github.com/vidhigadge/steelvision-dl
-```
+**Vidhi Gadge** · [github.com/vidhigadge/steelvision-dl](https://github.com/vidhigadge/steelvision-dl)
