@@ -53,3 +53,5 @@ data/domain_sources/
 data/domain_validation/
 
 data/clean_metal_source/
+
+src/ui/app1.py

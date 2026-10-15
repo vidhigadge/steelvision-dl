@@ -1,0 +1,2 @@
+mask_ratio_target,cases,class_flips,flip_rate,reconstructed_accuracy,confidence_change,entropy_change
+0.2,72,4,5.555555555555555,94.44444444444444,-0.17024688877993158,0.4255325208739922
